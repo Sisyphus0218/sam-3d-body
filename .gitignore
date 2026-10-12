@@ -110,10 +110,12 @@ lightning_logs/
 results/
 sandbox/
 debug/
+inputs/
 
 # Project-specific: Local tools
 .sl/
 *.lock
+!uv.lock
 
 # Project-specific: Testing
 **/.dist_test
