@@ -23,8 +23,17 @@ class HumanDetector:
             from sam3.model_builder import build_sam3_image_model
             from sam3.model.sam3_image_processor import Sam3Processor
             
-            self.detector = build_sam3_image_model()
-            self.processor = Sam3Processor(self.detector)
+            checkpoint_path = (
+                Path(__file__).resolve().parents[1] / "checkpoints/sam3/sam3.pt"
+            )
+            self.detector = build_sam3_image_model(
+                checkpoint_path=str(checkpoint_path),
+                load_from_HF=False,
+                device=str(self.device),
+            ).to(self.device).eval()
+            self.processor = Sam3Processor(
+                self.detector, device=str(self.device)
+            )
             self.detector_func = lambda detector, img, **kwargs: self.sam3_run(
                 img, **kwargs
             )
@@ -35,15 +44,23 @@ class HumanDetector:
         # switch bgr to rgb 
         img = img[:, :, ::-1].copy()
         img = Image.fromarray(img.astype('uint8'), 'RGB')
-        inference_state = self.processor.set_image(img)
-        # Prompt the model with text
-        output = self.processor.set_text_prompt(state=inference_state, prompt="person")
+        device_type = torch.device(self.device).type
+        with torch.autocast(
+            device_type=device_type,
+            dtype=torch.bfloat16,
+            enabled=device_type == "cuda",
+        ):
+            inference_state = self.processor.set_image(img)
+            # Prompt the model with text
+            output = self.processor.set_text_prompt(
+                state=inference_state, prompt="person"
+            )
 
         # Get the masks, bounding boxes, and scores
         masks, boxes, scores = output["masks"], output["boxes"], output["scores"]
         
         confident_idx = scores > bbox_thr
-        boxes = boxes[confident_idx].cpu().numpy()
+        boxes = boxes[confident_idx].float().cpu().numpy()
         
         # resize the box with a scale factor 1.2
         scale = 1.2

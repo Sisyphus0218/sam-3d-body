@@ -1,6 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import torch
+from pathlib import Path
 import numpy as np
 from PIL import Image
 
@@ -19,21 +20,24 @@ class HumanSegmentor:
             self.sam_func = run_sam3
         else:
             raise NotImplementedError
-    
+
     def run_sam(self, img, boxes, **kwargs):
         return self.sam_func(self.sam, img, boxes)
-        
+
 
 def load_sam2(device, path):
-    checkpoint = f"{path}/checkpoints/sam2.1_hiera_large.pt"
+    checkpoint = Path(path) / "sam2.1_hiera_large.pt"
     model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
 
     import sys
+
     sys.path.append(path)
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-    predictor = SAM2ImagePredictor(build_sam2(model_cfg, checkpoint, device=device))
+    predictor = SAM2ImagePredictor(
+        build_sam2(model_cfg, str(checkpoint), device=device)
+    )
     predictor.model.eval()
 
     return predictor
@@ -42,9 +46,16 @@ def load_sam2(device, path):
 def load_sam3(device, path):
     from sam3.model_builder import build_sam3_image_model
     from sam3.model.sam3_image_processor import Sam3Processor
-    
-    model = build_sam3_image_model()
-    predictor = Sam3Processor(model)
+
+    checkpoint_path = (
+        Path(__file__).resolve().parents[1] / "checkpoints/sam3/sam3.pt"
+    )
+    model = build_sam3_image_model(
+        checkpoint_path=str(checkpoint_path),
+        load_from_HF=False,
+        device=str(device),
+    ).to(device).eval()
+    predictor = Sam3Processor(model, device=str(device))
     return predictor
 
 
@@ -78,18 +89,26 @@ def run_sam2(sam_predictor, img, boxes):
 
 
 def run_sam3(sam_predictor, img, boxes):
-    # switch bgr to rgb 
+    # switch bgr to rgb
     img = img[:, :, ::-1].copy()
-    img = Image.fromarray(img.astype('uint8'), 'RGB')
-    inference_state = sam_predictor.set_image(img)
-    # Prompt the model with text
-    output = sam_predictor.set_text_prompt(state=inference_state, prompt="person")
+    img = Image.fromarray(img.astype("uint8"), "RGB")
+    device_type = next(sam_predictor.model.parameters()).device.type
+    with torch.autocast(
+        device_type=device_type,
+        dtype=torch.bfloat16,
+        enabled=device_type == "cuda",
+    ):
+        inference_state = sam_predictor.set_image(img)
+        # Prompt the model with text
+        output = sam_predictor.set_text_prompt(
+            state=inference_state, prompt="person"
+        )
 
     # Get the masks, bounding boxes, and scores
     masks, boxes, scores = output["masks"], output["boxes"], output["scores"]
     score_threshold = 0.5
     confident_idx = scores > score_threshold
     masks = masks[confident_idx].float().squeeze(1).cpu().numpy()
-    scores = scores[confident_idx].cpu().numpy()
+    scores = scores[confident_idx].float().cpu().numpy()
 
     return masks, scores
